@@ -119,6 +119,15 @@
       min-width: 140px;
     }
 
+    #fps-panel {
+      top: 2rem;
+      left: 2rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 100px;
+    }
+
     .stat-label {
       font-size: 0.75rem;
       letter-spacing: 0.1em;
@@ -134,6 +143,21 @@
       color: var(--accent);
       text-shadow: 0 0 15px rgba(255, 223, 0, 0.5);
       transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+    
+    .combo-multiplier {
+      font-size: 1.2rem;
+      color: var(--secondary);
+      text-shadow: 0 0 10px var(--secondary);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.3s ease;
+    }
+
+    .combo-multiplier.active {
+      opacity: 1;
+      transform: translateY(0) scale(1.1);
+      animation: pulseCombo 0.5s ease-out;
     }
 
     #status-indicator {
@@ -195,9 +219,59 @@
       transform: translateY(-50%) scale(1.05);
     }
 
+    /* Splash Screen */
+    #splash {
+      position: fixed;
+      inset: 0;
+      background: rgba(5, 5, 16, 0.95);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      backdrop-filter: blur(20px);
+      transition: opacity 0.8s ease, visibility 0.8s;
+    }
+
+    #splash.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    .splash-btn {
+      margin-top: 2rem;
+      background: transparent;
+      border: 2px solid var(--primary);
+      color: var(--primary);
+      font-family: 'Orbitron', sans-serif;
+      font-size: 1.2rem;
+      letter-spacing: 0.2em;
+      padding: 1rem 2.5rem;
+      border-radius: 30px;
+      cursor: pointer;
+      box-shadow: 0 0 15px rgba(0, 240, 255, 0.3), inset 0 0 15px rgba(0, 240, 255, 0.1);
+      transition: all 0.3s ease;
+      text-transform: uppercase;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .splash-btn:hover {
+      background: rgba(0, 240, 255, 0.15);
+      box-shadow: 0 0 30px rgba(0, 240, 255, 0.6), inset 0 0 20px rgba(0, 240, 255, 0.4);
+      transform: scale(1.05);
+    }
+
     @keyframes pulseText {
       0% { filter: drop-shadow(0 0 10px rgba(0, 240, 255, 0.3)); }
       100% { filter: drop-shadow(0 0 25px rgba(255, 0, 85, 0.6)); }
+    }
+
+    @keyframes pulseCombo {
+      0% { transform: scale(1); filter: brightness(1); }
+      50% { transform: scale(1.5); filter: brightness(1.5); }
+      100% { transform: scale(1.1); filter: brightness(1); }
     }
 
     @keyframes blink {
@@ -220,6 +294,16 @@
 </head>
 <body>
 
+  <!-- Splash Screen -->
+  <div id="splash">
+    <h1 class="title" style="font-size: clamp(2rem, 6vw, 4rem);">Neon Strings</h1>
+    <p class="subtitle" style="margin-top: 1rem; text-align: center; max-width: 600px; line-height: 1.6;">
+      An interactive, AI-powered Cat's Cradle simulation.<br/>
+      Allow camera access and bring your hands into view.
+    </p>
+    <button class="splash-btn" id="start-btn">Initialize System</button>
+  </div>
+
   <div id="container">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
@@ -232,14 +316,20 @@
       <div class="subtitle">Cat's Cradle Hand Tracker</div>
     </div>
 
+    <div id="fps-panel" class="glass-panel">
+      <div class="stat-label">FPS / System</div>
+      <div class="stat-value" id="fps-count" style="font-size: 1.5rem; color: #fff; text-shadow: 0 0 10px rgba(255,255,255,0.5);">60</div>
+    </div>
+
     <div id="stats-panel" class="glass-panel">
       <div class="stat-label">Connections</div>
       <div class="stat-value" id="touch-count">0</div>
+      <div class="combo-multiplier" id="combo-display">x1 Combo</div>
     </div>
 
     <div id="status-indicator" class="glass-panel">
       <div class="dot" id="status-dot"></div>
-      <span id="status-text">INITIALIZING CAMERA...</span>
+      <span id="status-text">WAITING FOR INITIALIZATION...</span>
     </div>
 
     <div class="hand-indicator" id="ind-left">LEFT HAND DETECTED</div>
@@ -248,27 +338,40 @@
 
   <script>
     document.addEventListener("DOMContentLoaded", () => {
+      const splash = document.getElementById('splash');
+      const startBtn = document.getElementById('start-btn');
+      
       const video = document.getElementById('video');
       const canvas = document.getElementById('canvas');
-      const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for performance
+      const ctx = canvas.getContext('2d', { alpha: false }); 
+      
       const statusText = document.getElementById('status-text');
       const statusDot = document.getElementById('status-dot');
       const tcEl = document.getElementById('touch-count');
+      const comboEl = document.getElementById('combo-display');
+      const fpsEl = document.getElementById('fps-count');
       const indLeft = document.getElementById('ind-left');
       const indRight = document.getElementById('ind-right');
 
       let W = 0, H = 0;
       let handResults = null;
       let particles = [];
+      let ambientOrbs = [];
       let touchTotal = 0;
       let prevTouching = {};
       let frameCount = 0;
       let isCameraReady = false;
+      let systemStarted = false;
+      
+      // FPS and Combo Tracking
+      let lastTime = performance.now();
+      let comboCount = 1;
+      let comboTimer = 0;
 
-      // Ensure canvas fills window
       function resize() {
         W = canvas.width = window.innerWidth;
         H = canvas.height = window.innerHeight;
+        initAmbientOrbs();
       }
       window.addEventListener('resize', resize);
       resize();
@@ -282,23 +385,69 @@
         [13,17],[0,17],[17,18],[18,19],[19,20]
       ];
 
+      // Ambient Background Orbs
+      class AmbientOrb {
+        constructor() {
+          this.reset();
+          this.x = Math.random() * W;
+          this.y = Math.random() * H;
+        }
+        reset() {
+          this.x = Math.random() * W;
+          this.y = H + 100;
+          this.vx = (Math.random() - 0.5) * 0.5;
+          this.vy = - (Math.random() * 1 + 0.2);
+          this.radius = Math.random() * 40 + 10;
+          const colors = ['rgba(0, 240, 255, 0.03)', 'rgba(255, 0, 85, 0.03)', 'rgba(255, 223, 0, 0.02)'];
+          this.color = colors[Math.floor(Math.random() * colors.length)];
+          this.wobble = Math.random() * Math.PI * 2;
+          this.wobbleSpeed = Math.random() * 0.02 + 0.01;
+        }
+        update() {
+          this.x += this.vx + Math.sin(this.wobble) * 0.5;
+          this.y += this.vy;
+          this.wobble += this.wobbleSpeed;
+          if (this.y < -100) this.reset();
+        }
+        draw(ctx) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.beginPath();
+          const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+          gradient.addColorStop(0, this.color.replace(/0\.0[23]\)$/, '0.1)'));
+          gradient.addColorStop(1, 'transparent');
+          ctx.fillStyle = gradient;
+          ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      function initAmbientOrbs() {
+        ambientOrbs = [];
+        for (let i = 0; i < 25; i++) {
+          ambientOrbs.push(new AmbientOrb());
+        }
+      }
+      initAmbientOrbs();
+
       class Particle {
-        constructor(x, y, color) {
+        constructor(x, y, color, isCore = false) {
           this.x = x; this.y = y;
           const angle = Math.random() * Math.PI * 2;
-          const speed = 2 + Math.random() * 8;
+          const speed = isCore ? (2 + Math.random() * 4) : (4 + Math.random() * 12);
           this.vx = Math.cos(angle) * speed;
           this.vy = Math.sin(angle) * speed;
           this.life = 1.0;
-          this.decay = 0.015 + Math.random() * 0.03;
-          this.radius = 2 + Math.random() * 4;
-          this.color = color;
+          this.decay = isCore ? 0.02 : (0.015 + Math.random() * 0.03);
+          this.radius = isCore ? (4 + Math.random() * 3) : (1.5 + Math.random() * 3);
+          this.color = isCore ? '#ffffff' : color;
         }
         update() {
           this.x += this.vx;
           this.y += this.vy;
-          this.vx *= 0.92;
-          this.vy *= 0.92;
+          this.vx *= 0.90;
+          this.vy *= 0.90;
           this.life -= this.decay;
         }
         draw(ctx) {
@@ -314,10 +463,15 @@
         }
       }
 
-      function explode(x, y) {
-        const palette = ['#00f0ff', '#ff0055', '#ffdf00', '#ffffff'];
-        for (let i = 0; i < 24; i++) {
+      function explode(x, y, comboMultiplier = 1) {
+        const palette = ['#00f0ff', '#ff0055', '#ffdf00'];
+        const count = Math.min(60, 20 + comboMultiplier * 5);
+        for (let i = 0; i < count; i++) {
           particles.push(new Particle(x, y, palette[i % palette.length]));
+        }
+        // Core white flashes
+        for (let i = 0; i < 5; i++) {
+          particles.push(new Particle(x, y, '#fff', true));
         }
       }
 
@@ -362,13 +516,13 @@
         ctx.restore();
       }
 
-      function drawLaserString(x1, y1, x2, y2, color) {
+      function drawLaserString(x1, y1, x2, y2, color, thicknessMultiplier = 1) {
         ctx.save();
         ctx.globalAlpha = 0.8;
-        ctx.shadowBlur = 20;
+        ctx.shadowBlur = 20 * thicknessMultiplier;
         ctx.shadowColor = color;
         ctx.strokeStyle = color;
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 3 * thicknessMultiplier;
         ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(x1, y1);
@@ -378,7 +532,7 @@
         ctx.globalAlpha = 1;
         ctx.shadowBlur = 5;
         ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 1 * thicknessMultiplier;
         ctx.stroke();
         ctx.restore();
       }
@@ -416,24 +570,58 @@
         width: 1280, height: 720
       });
 
-      cam.start().catch((err) => {
-        console.error(err);
-        statusText.textContent = "CAMERA ACCESS DENIED";
-        statusDot.style.backgroundColor = "red";
+      startBtn.addEventListener('click', () => {
+        splash.classList.add('hidden');
+        systemStarted = true;
+        statusText.textContent = "INITIALIZING CAMERA...";
+        
+        cam.start().catch((err) => {
+          console.error(err);
+          statusText.textContent = "CAMERA ACCESS DENIED";
+          statusDot.style.backgroundColor = "red";
+          splash.classList.remove('hidden');
+        });
+        
+        render();
       });
 
       function render() {
+        if (!systemStarted) return;
         requestAnimationFrame(render);
+        
+        const now = performance.now();
+        const dt = now - lastTime;
+        lastTime = now;
+        
         frameCount++;
+        
+        if (frameCount % 10 === 0) {
+          fpsEl.textContent = Math.round(1000 / dt);
+        }
+
+        // Handle Combo Decay
+        if (comboTimer > 0) {
+          comboTimer -= dt;
+          if (comboTimer <= 0) {
+            comboCount = 1;
+            comboEl.classList.remove('active');
+          }
+        }
 
         // Clear and draw background
         ctx.fillStyle = '#050510';
         ctx.fillRect(0, 0, W, H);
+        
+        // Draw Ambient Orbs
+        ambientOrbs.forEach(orb => {
+          orb.update();
+          orb.draw(ctx);
+        });
 
         // Draw video feedback subtly
         if (isCameraReady && video.readyState >= 2) {
           ctx.save();
-          ctx.globalAlpha = 0.15;
+          ctx.globalAlpha = 0.12;
           ctx.filter = 'saturate(1.2) contrast(1.2) sepia(0.3) hue-rotate(180deg)';
           ctx.translate(W, 0);
           ctx.scale(-1, 1);
@@ -444,7 +632,6 @@
         const handsData = {};
         if (handResults && handResults.multiHandLandmarks && handResults.multiHandedness) {
           handResults.multiHandedness.forEach((info, i) => {
-            // Check info structure carefully; usually MediaPipe Hands web JS uses label
             const label = info.label === 'Left' ? 'Right' : 'Left'; // mirror
             handsData[label] = handResults.multiHandLandmarks[i];
           });
@@ -495,17 +682,32 @@
             const dist = Math.hypot(rp.x - lp.x, rp.y - lp.y);
             const col = stringColor(Math.min(dist / (W * 0.5), 1) + fi * 0.1);
 
-            drawLaserString(lp.x, lp.y, rp.x, rp.y, col);
+            // Thicker lines based on combo
+            const thickness = 1 + (comboCount * 0.1);
+            drawLaserString(lp.x, lp.y, rp.x, rp.y, col, thickness);
 
             // Interaction / Touch
             const key = `t${tipIdx}`;
-            const touching = dist < 40;
+            const touching = dist < 45; // slightly larger hit area
             if (touching && !prevTouching[key]) {
-              touchTotal++;
+              touchTotal += comboCount;
               tcEl.textContent = touchTotal;
-              tcEl.style.transform = 'scale(1.3)';
+              
+              // Handle combo
+              comboCount++;
+              comboTimer = 2500; // 2.5s to keep combo alive
+              if (comboCount > 1) {
+                comboEl.textContent = `x${comboCount} COMBO!`;
+                comboEl.classList.add('active');
+                comboEl.style.animation = 'none';
+                comboEl.offsetHeight; /* trigger reflow */
+                comboEl.style.animation = null; 
+              }
+
+              tcEl.style.transform = `scale(${1.2 + comboCount * 0.05})`;
               setTimeout(() => { tcEl.style.transform = 'scale(1)'; }, 150);
-              explode((lp.x + rp.x) * 0.5, (lp.y + rp.y) * 0.5);
+              
+              explode((lp.x + rp.x) * 0.5, (lp.y + rp.y) * 0.5, comboCount);
             }
             prevTouching[key] = touching;
           });
@@ -519,10 +721,10 @@
                 const col = stringColor(Math.min(dist / (W * 0.8), 1));
                 
                 ctx.save();
-                ctx.globalAlpha = 0.3;
+                ctx.globalAlpha = 0.2 + (comboCount * 0.05);
                 ctx.setLineDash([5, 10]);
                 ctx.strokeStyle = col;
-                ctx.lineWidth = 1;
+                ctx.lineWidth = 1 + (comboCount * 0.1);
                 ctx.beginPath();
                 ctx.moveTo(lp.x, lp.y);
                 ctx.lineTo(rp.x, rp.y);
@@ -537,8 +739,6 @@
         particles = particles.filter(p => p.life > 0);
         particles.forEach(p => { p.update(); p.draw(ctx); });
       }
-
-      render();
     });
   </script>
 </body>
